@@ -4,7 +4,8 @@ const { useState, useEffect } = React;
 const { Btn, Card, Badge, AppInput, Modal,
   IcoX, IcoSearch, IcoPlus, IcoEdit, IcoTrash, IcoCheck,
   IcoCart, IcoPackage, IcoUsers, IcoAlert, IcoShield, IcoEye, IcoReceipt, IcoSettings,
-  IcoGift, IcoClipboard, IcoCalendar } = window;
+  IcoGift, IcoClipboard, IcoCalendar, IcoTrend,
+  Dashboard, AppLayout, LoginScreen } = window;
 
 const calcToBase   = window.calcToBase;
 const formatStock  = window.formatStock;
@@ -502,7 +503,7 @@ const Inventory = ({user={}, products:propProducts=null, onUpdateProducts=null})
 };
 
 // ─── POS Screen ───────────────────────────────────────────────────────────────
-const POSScreen = ({user={},customers=[],onAddCustomer,employees=[],receiptSettings,onOpenReceiptSettings,onCreditSale}) => {
+const POSScreen = ({user={},customers=[],onAddCustomer,employees=[],receiptSettings,onOpenReceiptSettings,onCreditSale,onSale}) => {
   const isAdmin=user.role==='admin';
   const hiddenProdIds=React.useMemo(()=>{try{return JSON.parse(localStorage.getItem(`ptHiddenProds_${user.staffId||'admin'}`))||[];}catch{return[];}},[user.staffId]);
   const [products]=useState(()=>{
@@ -552,16 +553,22 @@ const POSScreen = ({user={},customers=[],onAddCustomer,employees=[],receiptSetti
 
   const finalize=()=>{
     const itemsWithPrice=cart.map(x=>({...x,unitPrice:effPrice(x),priceEdited:!!priceEdits[x._key],editReason:priceEdits[x._key]?.reason||''}));
+    const now=new Date();
     const sale={
       id:`BIL-${Date.now()}`,
+      ts:now.getTime(),
       items:itemsWithPrice,subtotal,discAmt,discount,total,payMethod,
+      payment:payMethod,
+      itemCount:itemsWithPrice.reduce((s,x)=>s+x.qty,0),
       freebies:[...freebies],freebieTotal:freebies.reduce((s,x)=>s+x.qty*x.unitPrice,0),
       hasPriceEdit:Object.keys(priceEdits).length>0,
       customer:myCusts.find(c=>c.id===+customer)||null,
-      date:new Date().toLocaleDateString('th-TH',{year:'numeric',month:'long',day:'numeric'}),
+      customerName:(myCusts.find(c=>c.id===+customer)||{}).name||'ลูกค้าทั่วไป',
+      date:now.toLocaleDateString('th-TH',{year:'numeric',month:'long',day:'numeric'}),
       staffName:user.name,staffId:user.staffId,
       isPaid: payMethod!=='credit',
     };
+    if(onSale) onSale(sale);
     if(payMethod==='credit'&&onCreditSale) onCreditSale(sale);
     setLastSale(sale);
     setShowReceipt(true);
@@ -698,30 +705,69 @@ const POSScreen = ({user={},customers=[],onAddCustomer,employees=[],receiptSetti
   );
 };
 
-// ─── Reports (unchanged) ──────────────────────────────────────────────────────
-const Reports = () => {
+// ─── Reports (live data) ──────────────────────────────────────────────────────
+const Reports = ({ recentSales=[], products=[], customers=[] }) => {
   const [period,setPeriod]=useState('week');
-  const {dailySales,recentSales}=window.AppData;
-  const maxAmt=Math.max(...dailySales.map(d=>d.amount));
-  const totalRev=dailySales.reduce((s,d)=>s+d.amount,0);
-  const topProds=[{name:'น้ำดื่มสิงห์ 600ml',sold:145},{name:'โค้ก 325ml',sold:54},{name:'น้ำตาลทราย 1kg',sold:210},{name:'บะหมี่มาม่า',sold:89},{name:'ผงซักฟอกเปา',sold:76}];
-  const kpis=[{label:'รายได้รวม',value:`฿${totalRev.toLocaleString()}`,color:'#4F46E5'},{label:'เฉลี่ยต่อวัน',value:`฿${Math.round(totalRev/dailySales.length).toLocaleString()}`,color:'#10B981'},{label:'จำนวนบิล',value:`${recentSales.length} ใบ`,color:'#F59E0B'},{label:'กำไร (ประมาณ)',value:`฿${Math.round(totalRev*0.22).toLocaleString()}`,color:'#8B5CF6'}];
+  const dayKey = ts => { const d=new Date(ts); return `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`; };
+  const tsOf   = s => s.ts || Date.now();
+
+  const periodCfg = { week:{days:7,label:'7 วันล่าสุด'}, month:{days:30,label:'30 วันล่าสุด'}, quarter:{days:90,label:'90 วันล่าสุด'} };
+  const days = periodCfg[period].days;
+  const cutoff = Date.now() - days*86400000;
+  const periodSales = recentSales.filter(s => tsOf(s) >= cutoff);
+
+  const totalRev = periodSales.reduce((s,x)=>s+(x.total||0),0);
+  const billCount = periodSales.length;
+  const avgPerDay = Math.round(totalRev/days);
+  const profit = Math.round(totalRev*0.22);
+  const kpis=[
+    {label:'รายได้รวม',value:`฿${totalRev.toLocaleString()}`,color:'#4F46E5'},
+    {label:'เฉลี่ยต่อวัน',value:`฿${avgPerDay.toLocaleString()}`,color:'#10B981'},
+    {label:'จำนวนบิล',value:`${billCount} ใบ`,color:'#F59E0B'},
+    {label:'กำไร (ประมาณ)',value:`฿${profit.toLocaleString()}`,color:'#8B5CF6'},
+  ];
+
+  // กราฟยอดขายรายวัน — แสดงสูงสุด 14 แท่งสำหรับช่วงที่ยาว
+  const barCount = Math.min(days, 14);
+  const dailySales=[];
+  for(let i=barCount-1; i>=0; i--){
+    const d=new Date(); d.setDate(d.getDate()-i);
+    const key=dayKey(d.getTime());
+    const amount=recentSales.filter(s=>dayKey(tsOf(s))===key).reduce((s,x)=>s+(x.total||0),0);
+    dailySales.push({ day:d.toLocaleDateString('th-TH',{month:'short',day:'numeric'}), amount });
+  }
+  const maxAmt=Math.max(...dailySales.map(d=>d.amount),1);
+
+  // สินค้าขายดี — รวมจำนวนชิ้นจากรายการขายจริง
+  const prodMap={};
+  periodSales.forEach(sale=>{
+    (Array.isArray(sale.items)?sale.items:[]).forEach(it=>{
+      const name=it.name||'ไม่ระบุ';
+      prodMap[name]=(prodMap[name]||0)+(it.qty||0);
+    });
+  });
+  const topProds=Object.entries(prodMap).map(([name,sold])=>({name,sold})).sort((a,b)=>b.sold-a.sold).slice(0,5);
+  const topMax = topProds[0]?.sold || 1;
+
   return (
     <div style={{display:'flex',flexDirection:'column',gap:'20px'}}>
-      <div style={{display:'flex',gap:'8px'}}>{[{id:'week',label:'7 วันล่าสุด'},{id:'month',label:'เดือนนี้'},{id:'quarter',label:'ไตรมาส'}].map(p=>(<button key={p.id} onClick={()=>setPeriod(p.id)} style={{padding:'9px 18px',borderRadius:'9px',border:'1.5px solid',cursor:'pointer',fontFamily:'inherit',fontWeight:600,fontSize:'13px',background:period===p.id?'var(--primary)':'var(--surface)',color:period===p.id?'#fff':'var(--text-muted)',borderColor:period===p.id?'var(--primary)':'var(--border)'}}>{p.label}</button>))}</div>
+      <div style={{display:'flex',gap:'8px'}}>{[{id:'week',label:'7 วันล่าสุด'},{id:'month',label:'30 วันล่าสุด'},{id:'quarter',label:'90 วัน'}].map(p=>(<button key={p.id} onClick={()=>setPeriod(p.id)} style={{padding:'9px 18px',borderRadius:'9px',border:'1.5px solid',cursor:'pointer',fontFamily:'inherit',fontWeight:600,fontSize:'13px',background:period===p.id?'var(--primary)':'var(--surface)',color:period===p.id?'#fff':'var(--text-muted)',borderColor:period===p.id?'var(--primary)':'var(--border)'}}>{p.label}</button>))}</div>
       <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(180px,1fr))',gap:'14px'}}>{kpis.map((k,i)=><Card key={i} style={{padding:'20px'}}><p style={{fontSize:'12px',color:'var(--text-muted)',fontWeight:600,textTransform:'uppercase',letterSpacing:'0.05em',marginBottom:'8px'}}>{k.label}</p><p style={{fontSize:'28px',fontWeight:800,color:k.color}}>{k.value}</p></Card>)}</div>
       <div style={{display:'grid',gridTemplateColumns:'1.5fr 1fr',gap:'16px'}}>
         <Card style={{padding:'22px'}}>
           <p style={{fontSize:'15px',fontWeight:700,marginBottom:'2px'}}>ยอดขายรายวัน</p>
           <p style={{fontSize:'12px',color:'var(--text-muted)',marginBottom:'22px'}}>Daily Revenue</p>
-          <div style={{display:'flex',alignItems:'flex-end',gap:'12px',height:'180px'}}>
-            {dailySales.map((d,i)=>{const h=(d.amount/maxAmt)*150;const isT=i===dailySales.length-1;return(<div key={i} style={{flex:1,display:'flex',flexDirection:'column',alignItems:'center',gap:'6px'}}><span style={{fontSize:'10px',color:'var(--text-muted)',fontWeight:600}}>฿{(d.amount/1000).toFixed(0)}k</span><div style={{width:'100%',height:`${h}px`,background:isT?'#C7D2FE':'var(--primary)',borderRadius:'7px 7px 0 0',opacity:isT?0.7:1}}/><span style={{fontSize:'10px',color:'var(--text-muted)',whiteSpace:'nowrap'}}>{d.day}</span></div>);})}
+          <div style={{display:'flex',alignItems:'flex-end',gap:'8px',height:'180px'}}>
+            {dailySales.map((d,i)=>{const h=(d.amount/maxAmt)*150;const isT=i===dailySales.length-1;return(<div key={i} style={{flex:1,display:'flex',flexDirection:'column',alignItems:'center',gap:'6px'}}><span style={{fontSize:'9px',color:'var(--text-muted)',fontWeight:600}}>{d.amount>=1000?`฿${(d.amount/1000).toFixed(0)}k`:d.amount>0?`฿${d.amount}`:''}</span><div style={{width:'100%',height:`${Math.max(h,2)}px`,background:isT?'#C7D2FE':'var(--primary)',borderRadius:'7px 7px 0 0',opacity:isT?0.7:1}}/><span style={{fontSize:'9px',color:'var(--text-muted)',whiteSpace:'nowrap'}}>{d.day}</span></div>);})}
           </div>
         </Card>
         <Card style={{padding:'22px'}}>
           <p style={{fontSize:'15px',fontWeight:700,marginBottom:'2px'}}>สินค้าขายดี</p>
           <p style={{fontSize:'12px',color:'var(--text-muted)',marginBottom:'16px'}}>Top Products</p>
-          <div style={{display:'flex',flexDirection:'column',gap:'14px'}}>{topProds.map((p,i)=>(<div key={i}><div style={{display:'flex',justifyContent:'space-between',marginBottom:'5px'}}><p style={{fontSize:'13px',fontWeight:600,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap',maxWidth:'65%'}}>{p.name}</p><span style={{fontSize:'12px',color:'var(--text-muted)',flexShrink:0}}>{p.sold} ชิ้น</span></div><div style={{height:'7px',background:'#E2E8F0',borderRadius:'4px'}}><div style={{height:'100%',borderRadius:'4px',background:`hsl(${230+i*25},65%,55%)`,width:`${(p.sold/topProds[0].sold)*100}%`}}/></div></div>))}</div>
+          {topProds.length===0
+            ? <p style={{fontSize:'13px',color:'var(--text-muted)',padding:'20px 0',textAlign:'center'}}>ยังไม่มีข้อมูลการขายในช่วงนี้</p>
+            : <div style={{display:'flex',flexDirection:'column',gap:'14px'}}>{topProds.map((p,i)=>(<div key={i}><div style={{display:'flex',justifyContent:'space-between',marginBottom:'5px'}}><p style={{fontSize:'13px',fontWeight:600,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap',maxWidth:'65%'}}>{p.name}</p><span style={{fontSize:'12px',color:'var(--text-muted)',flexShrink:0}}>{p.sold} ชิ้น</span></div><div style={{height:'7px',background:'#E2E8F0',borderRadius:'4px'}}><div style={{height:'100%',borderRadius:'4px',background:`hsl(${230+i*25},65%,55%)`,width:`${(p.sold/topMax)*100}%`}}/></div></div>))}</div>
+          }
         </Card>
       </div>
     </div>
@@ -942,19 +988,22 @@ ${rs.footerText?`<hr class="dashed"><p class="sub">${rs.footerText}</p>`:''}
 };
 
 // ─── Employees (with edit + PromptPay) ───────────────────────────────────────
-const Employees = ({employees=[],onUpdate,user={},customers=[]}) => {
+const Employees = ({employees=[],onUpdate,onDelete,user={},customers=[]}) => {
   const isAdmin=user.role==='admin';
   const [editModal,setEditModal]=useState(false);
   const [editTarget,setEditTarget]=useState(null);
   const [form,setForm]=useState({});
   const [addModal,setAddModal]=useState(false);
   const [addForm,setAddForm]=useState({name:'',role:'employee',phone:'',joinDate:'',promptPayId:''});
-  const [staffModal,setStaffModal]=useState(null); // {emp, tab}
+  const [staffModal,setStaffModal]=useState(null);
+  const [deleteConfirm,setDeleteConfirm]=useState(null); // emp to delete
 
   const openEdit=e=>{setEditTarget(e);setForm({...e});setEditModal(true);};
   const saveEdit=()=>{onUpdate(employees.map(e=>e.id===editTarget.id?{...e,...form}:e));setEditModal(false);};
   const addEmp=()=>{onUpdate([...employees,{id:Date.now(),...addForm,status:'active'}]);setAddModal(false);setAddForm({name:'',role:'employee',phone:'',joinDate:'',promptPayId:''});};
   const toggle=id=>onUpdate(employees.map(e=>e.id===id?{...e,status:e.status==='active'?'inactive':'active'}:e));
+  const isSelf=e=>String(e.id)===String(user.uid)||String(e._fbid)===String(user.uid);
+  const doDelete=()=>{if(deleteConfirm&&onDelete){onDelete(deleteConfirm.id||deleteConfirm._fbid);setDeleteConfirm(null);}};
 
   return (
     <div style={{display:'flex',flexDirection:'column',gap:'16px'}}>
@@ -985,6 +1034,7 @@ const Employees = ({employees=[],onUpdate,user={},customers=[]}) => {
               <div style={{display:'flex',gap:'6px'}}>
                 {isAdmin&&<button onClick={()=>openEdit(e)} style={{background:'var(--primary-light)',border:'none',color:'var(--primary)',padding:'6px 10px',borderRadius:'7px',cursor:'pointer',display:'flex'}}><IcoEdit/></button>}
                 <button onClick={()=>toggle(e.id)} style={{fontSize:'12px',padding:'5px 10px',borderRadius:'7px',border:'1.5px solid var(--border)',background:'var(--surface)',cursor:'pointer',color:'var(--text-muted)',fontFamily:'inherit',fontWeight:500}}>สถานะ</button>
+                {isAdmin&&!isSelf(e)&&<button onClick={()=>setDeleteConfirm(e)} title="ลบพนักงาน (ลาออก)" style={{background:'#FEE2E2',border:'none',color:'#DC2626',padding:'6px 10px',borderRadius:'7px',cursor:'pointer',display:'flex',alignItems:'center'}}><IcoTrash/></button>}
               </div>
             </div>
           </Card>
@@ -1032,6 +1082,35 @@ const Employees = ({employees=[],onUpdate,user={},customers=[]}) => {
         </div>
         <div style={{display:'flex',justifyContent:'flex-end',gap:'10px',marginTop:'22px',paddingTop:'18px',borderTop:'1px solid var(--border)'}}><Btn variant="outline" onClick={()=>setAddModal(false)}>ยกเลิก</Btn><Btn icon={<IcoCheck/>} onClick={addEmp} disabled={!addForm.name}>เพิ่มพนักงาน</Btn></div>
       </Modal>}
+
+      {/* Delete Confirm Modal */}
+      <Modal open={!!deleteConfirm} onClose={()=>setDeleteConfirm(null)} title="ลบพนักงานออกจากระบบ" width={420}>
+        {deleteConfirm&&(
+          <div style={{display:'flex',flexDirection:'column',gap:'16px'}}>
+            <div style={{display:'flex',alignItems:'center',gap:'14px',padding:'16px',background:'#FEF2F2',borderRadius:'12px',border:'1px solid #FECACA'}}>
+              <div style={{width:'52px',height:'52px',borderRadius:'50%',background:'linear-gradient(135deg,#EF4444,#DC2626)',display:'flex',alignItems:'center',justifyContent:'center',color:'#fff',fontWeight:800,fontSize:'22px',flexShrink:0}}>{deleteConfirm.name?.charAt(0)}</div>
+              <div>
+                <p style={{fontWeight:700,fontSize:'16px',color:'#991B1B'}}>{deleteConfirm.name}</p>
+                <p style={{fontSize:'13px',color:'#B91C1C'}}>{deleteConfirm.role==='admin'?'👑 Admin':'👤 พนักงาน'} · {deleteConfirm.phone||'—'}</p>
+              </div>
+            </div>
+            <div style={{background:'#FFFBEB',border:'1px solid #FDE68A',borderRadius:'10px',padding:'14px 16px'}}>
+              <p style={{fontSize:'13px',fontWeight:700,color:'#92400E',marginBottom:'6px'}}>⚠ การดำเนินการนี้ไม่สามารถย้อนกลับได้</p>
+              <ul style={{fontSize:'13px',color:'#B45309',paddingLeft:'18px',lineHeight:1.8}}>
+                <li>ข้อมูลพนักงานจะถูกลบออกจากระบบ</li>
+                <li>บัญชีการ Login จะถูกปิดใช้งาน</li>
+                <li>ประวัติการขายยังคงอยู่ใน Reports</li>
+              </ul>
+            </div>
+            <div style={{display:'flex',gap:'10px',paddingTop:'4px'}}>
+              <Btn variant="outline" onClick={()=>setDeleteConfirm(null)} style={{flex:1,justifyContent:'center'}}>ยกเลิก</Btn>
+              <button onClick={doDelete} style={{flex:2,padding:'12px',background:'linear-gradient(135deg,#EF4444,#DC2626)',color:'#fff',border:'none',borderRadius:'10px',fontSize:'14px',fontWeight:700,cursor:'pointer',fontFamily:'inherit',display:'flex',alignItems:'center',justifyContent:'center',gap:'8px'}}>
+                <IcoTrash/> ยืนยันลบพนักงาน
+              </button>
+            </div>
+          </div>
+        )}
+      </Modal>
     </div>
   );
 };
@@ -1465,10 +1544,42 @@ const DailyCloseAdminScreen = ({dailyClosings=[],onUpdate}) => {
 };
 
 // ─── Settings Screen ──────────────────────────────────────────────────────────
-const SettingsScreen = ({receiptSettings, onSave}) => {
+const SettingsScreen = ({receiptSettings, onSave, allData={}, onReset}) => {
   const [s,setS]   = useState(receiptSettings);
   const [tab,setTab] = useState('receipt');
   const [saved,setSaved] = useState(false);
+  const [resetConfirm,setResetConfirm] = useState(false);
+  const [resetDone,setResetDone]       = useState(false);
+  const [resetWord,setResetWord]       = useState('');
+
+  const doBackup = () => {
+    const d = {
+      exportedAt: new Date().toISOString(),
+      version: '1.0',
+      note: 'PORNSAWAN TRADE backup',
+      employees:     allData.employees     || [],
+      customers:     allData.customers     || [],
+      products:      allData.products      || [],
+      stockRequests: allData.stockRequests || [],
+      dailyClosings: allData.dailyClosings || [],
+      creditSales:   allData.creditSales   || [],
+    };
+    const blob = new Blob([JSON.stringify(d, null, 2)], {type:'application/json'});
+    const url  = URL.createObjectURL(blob);
+    const a    = document.createElement('a');
+    a.href     = url;
+    a.download = `PORNSAWAN-backup-${new Date().toISOString().slice(0,10)}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const doReset = async () => {
+    if(onReset) await onReset();
+    setResetConfirm(false);
+    setResetWord('');
+    setResetDone(true);
+    setTimeout(()=>setResetDone(false), 4000);
+  };
   const logoRef = React.useRef(null);
 
   React.useEffect(()=>setS(receiptSettings),[receiptSettings]);
@@ -1487,7 +1598,7 @@ const SettingsScreen = ({receiptSettings, onSave}) => {
     setTimeout(()=>setSaved(false),2200);
   };
 
-  const tabs=[{id:'receipt',icon:'🧾',label:'ตั้งค่าใบเสร็จ'},{id:'printer',icon:'🖨️',label:'ตั้งค่าเครื่องพิมพ์'}];
+  const tabs=[{id:'receipt',icon:'🧾',label:'ตั้งค่าใบเสร็จ'},{id:'printer',icon:'🖨️',label:'ตั้งค่าเครื่องพิมพ์'},{id:'data',icon:'💾',label:'ข้อมูล & รีเซ็ต'}];
 
   return (
     <div style={{display:'flex',flexDirection:'column',gap:'20px',maxWidth:'1000px'}}>
@@ -1682,6 +1793,93 @@ const SettingsScreen = ({receiptSettings, onSave}) => {
           </div>
         </Card>
       )}
+
+      {/* ─ Data Tab ─ */}
+      {tab==='data'&&(
+        <div style={{display:'flex',flexDirection:'column',gap:'16px',maxWidth:'680px'}}>
+          {resetDone&&(
+            <div style={{background:'#D1FAE5',border:'1px solid #6EE7B7',borderRadius:'10px',padding:'12px 18px',color:'#065F46',fontWeight:600,fontSize:'14px',display:'flex',alignItems:'center',gap:'8px'}}>
+              ✓ รีเซ็ตข้อมูลทดสอบสำเร็จ — ระบบพร้อมใช้งานจริงแล้ว
+            </div>
+          )}
+
+          {/* Backup Section */}
+          <Card style={{padding:'26px'}}>
+            <div style={{display:'flex',alignItems:'center',gap:'12px',marginBottom:'6px'}}>
+              <span style={{fontSize:'28px'}}>📦</span>
+              <div><p style={{fontWeight:700,fontSize:'16px'}}>สำรองข้อมูล (Backup)</p><p style={{fontSize:'13px',color:'var(--text-muted)'}}>ดาวน์โหลดข้อมูลทั้งหมดเป็นไฟล์ JSON</p></div>
+            </div>
+            <div style={{background:'#F8FAFC',borderRadius:'10px',padding:'14px 16px',margin:'16px 0',display:'grid',gridTemplateColumns:'1fr 1fr 1fr',gap:'12px',textAlign:'center'}}>
+              {[
+                ['👥','พนักงาน',(allData.employees||[]).length],
+                ['🛍️','ลูกค้า',(allData.customers||[]).length],
+                ['📦','สินค้า',(allData.products||[]).length],
+                ['📋','คำขอเบิก',(allData.stockRequests||[]).length],
+                ['📅','ปิดยอด',(allData.dailyClosings||[]).length],
+                ['💳','เครดิต',(allData.creditSales||[]).length],
+              ].map(([ico,label,count])=>(
+                <div key={label} style={{padding:'10px',background:'var(--surface)',borderRadius:'8px',border:'1px solid var(--border)'}}>
+                  <p style={{fontSize:'20px',marginBottom:'4px'}}>{ico}</p>
+                  <p style={{fontSize:'11px',color:'var(--text-muted)',fontWeight:600}}>{label}</p>
+                  <p style={{fontSize:'20px',fontWeight:800,color:'var(--primary)'}}>{count}</p>
+                </div>
+              ))}
+            </div>
+            <button onClick={doBackup}
+              style={{width:'100%',padding:'13px',background:'linear-gradient(135deg,#10B981,#059669)',color:'#fff',border:'none',borderRadius:'10px',fontSize:'15px',fontWeight:700,cursor:'pointer',fontFamily:'inherit',display:'flex',alignItems:'center',justifyContent:'center',gap:'10px'}}>
+              ⬇️ ดาวน์โหลด Backup JSON
+            </button>
+          </Card>
+
+          {/* Reset Section */}
+          <Card style={{padding:'26px',border:'1.5px solid #FECACA'}}>
+            <div style={{display:'flex',alignItems:'center',gap:'12px',marginBottom:'6px'}}>
+              <span style={{fontSize:'28px'}}>🔄</span>
+              <div><p style={{fontWeight:700,fontSize:'16px',color:'#DC2626'}}>รีเซ็ตข้อมูลทดสอบ</p><p style={{fontSize:'13px',color:'var(--text-muted)'}}>ล้างรายการขายและข้อมูล Transaction ทั้งหมด</p></div>
+            </div>
+
+            <div style={{background:'#FEF2F2',border:'1px solid #FECACA',borderRadius:'10px',padding:'14px 16px',margin:'16px 0'}}>
+              <p style={{fontSize:'13px',fontWeight:700,color:'#991B1B',marginBottom:'8px'}}>สิ่งที่จะถูกลบ:</p>
+              <ul style={{fontSize:'13px',color:'#B91C1C',paddingLeft:'18px',lineHeight:1.9}}>
+                <li>รายการขายทั้งหมด (Sales)</li>
+                <li>รายการเครดิต / ค้างชำระ</li>
+                <li>คำขอเบิกสินค้า</li>
+                <li>รายงานปิดยอดรายวัน</li>
+              </ul>
+              <p style={{fontSize:'13px',fontWeight:700,color:'#065F46',marginTop:'10px',marginBottom:'4px'}}>สิ่งที่จะ<u>ไม่</u>ถูกลบ:</p>
+              <ul style={{fontSize:'13px',color:'#047857',paddingLeft:'18px',lineHeight:1.9}}>
+                <li>รายชื่อลูกค้า</li>
+                <li>รายการสินค้าและราคา</li>
+                <li>จำนวนสินค้าในโกดัง (Stock)</li>
+                <li>รายชื่อพนักงาน</li>
+              </ul>
+            </div>
+
+            {!resetConfirm?(
+              <button onClick={()=>setResetConfirm(true)}
+                style={{width:'100%',padding:'13px',background:'#FEE2E2',color:'#DC2626',border:'1.5px solid #FECACA',borderRadius:'10px',fontSize:'15px',fontWeight:700,cursor:'pointer',fontFamily:'inherit'}}>
+                🔄 รีเซ็ตข้อมูลทดสอบ...
+              </button>
+            ):(
+              <div style={{display:'flex',flexDirection:'column',gap:'12px',padding:'16px',background:'#FEF2F2',borderRadius:'10px',border:'1.5px solid #FCA5A5'}}>
+                <p style={{fontSize:'13px',fontWeight:700,color:'#991B1B'}}>พิมพ์ "RESET" เพื่อยืนยัน:</p>
+                <input value={resetWord} onChange={e=>setResetWord(e.target.value)} placeholder='พิมพ์ "RESET" เป็นตัวพิมพ์ใหญ่'
+                  style={{padding:'10px 14px',border:`1.5px solid ${resetWord==='RESET'?'#DC2626':'var(--border)'}`,borderRadius:'8px',fontSize:'14px',fontFamily:'inherit',background:'var(--surface)',letterSpacing:'2px',fontWeight:700}}/>
+                <div style={{display:'flex',gap:'10px'}}>
+                  <button onClick={()=>{setResetConfirm(false);setResetWord('');}}
+                    style={{flex:1,padding:'11px',background:'var(--surface)',border:'1px solid var(--border)',borderRadius:'9px',cursor:'pointer',fontFamily:'inherit',fontWeight:600,fontSize:'14px',color:'var(--text-muted)'}}>
+                    ยกเลิก
+                  </button>
+                  <button onClick={doReset} disabled={resetWord!=='RESET'}
+                    style={{flex:2,padding:'11px',background:resetWord==='RESET'?'linear-gradient(135deg,#EF4444,#DC2626)':'#E2E8F0',color:resetWord==='RESET'?'#fff':'#94A3B8',border:'none',borderRadius:'9px',fontSize:'14px',fontWeight:700,cursor:resetWord==='RESET'?'pointer':'not-allowed',fontFamily:'inherit'}}>
+                    ✓ ยืนยันรีเซ็ต
+                  </button>
+                </div>
+              </div>
+            )}
+          </Card>
+        </div>
+      )}
     </div>
   );
 };
@@ -1691,6 +1889,7 @@ const TWEAK_DEFAULTS=/*EDITMODE-BEGIN*/{"theme":"dark","density":"normal"}/*EDIT
 
 const App=()=>{
   const [t,setTweak]=window.useTweaks(TWEAK_DEFAULTS);
+
   const [user,setUser]=useState(null);
   const [screen,setScreen]=useState('dashboard');
   const [authChecked,setAuthChecked]=useState(window.FIREBASE_DEMO_MODE); // demo = skip wait
@@ -1702,13 +1901,18 @@ const App=()=>{
   const [stockRequests,setStockRequests] = useState([]);
   const [dailyClosings,setDailyClosings] = useState([]);
   const [creditSales,setCreditSales]   = useState([]);
+  const [recentSales,setRecentSales]   = useState(()=>{
+    const seed = window.AppData.recentSales || [];
+    // ให้ข้อมูล seed มี timestamp เพื่อให้กราฟ/ตัวกรองช่วงเวลาทำงานถูกต้อง
+    return seed.map((s,i)=> s.ts ? s : {...s, ts: Date.now() - i*86400000});
+  });
   const [showReceiptSettings,setShowReceiptSettings] = useState(false);
   const [receiptSettings,setReceiptSettings] = useState(()=>{
     try{return JSON.parse(localStorage.getItem('ptReceiptSettings'))||{companyName:'PORNSAWAN TRADE',footerText:'ขอบคุณที่ใช้บริการ',showPromptPay:true,companyAddress:'',companyContact:'',showTaxId:false,taxId:'',logoUrl:'',logoSize:60,paperWidth:'80mm',autoPrint:false,receiptFontSize:14,copies:1};}
     catch{return{companyName:'PORNSAWAN TRADE',footerText:'ขอบคุณที่ใช้บริการ',showPromptPay:true,companyAddress:'',companyContact:'',showTaxId:false,taxId:'',logoUrl:'',logoSize:60,paperWidth:'80mm',autoPrint:false,receiptFontSize:14,copies:1};}
   });
 
-  // ── Tweaks / theme ─────────────────────────────────────────────────────────
+// ── Tweaks / theme ─────────────────────────────────────────────────────────
   useEffect(()=>{
     const cls=document.body.classList;
     cls.remove('theme-light','theme-purple','compact');
@@ -1747,6 +1951,9 @@ const App=()=>{
       window.fbSubscribe('stockRequests', data=>setStockRequests(data)),
       window.fbSubscribe('dailyClosings', data=>setDailyClosings(data)),
       window.fbSubscribe('creditSales',   data=>setCreditSales(data)),
+      window.fbSubscribe('sales',         data=>setRecentSales(
+        [...data].sort((a,b)=>(b.ts||0)-(a.ts||0))
+      )),
     ];
     return ()=>unsubs.forEach(u=>u());
   },[user]);
@@ -1765,6 +1972,26 @@ const App=()=>{
   const updateEmployees = async newEmps => {
     if(window.DB){ await window.fbBatchWriteEmployees(newEmps); }
     else { setEmployees(newEmps); }
+  };
+
+  const deleteEmployee = async id => {
+    if(window.DB){ await window.fbDelete('users', id); }
+    else { setEmployees(prev=>prev.filter(e=>String(e.id)!==String(id)&&String(e._fbid)!==String(id))); }
+  };
+
+  const resetData = async () => {
+    if(window.DB){
+      for(const r of stockRequests){ try{ await window.fbDelete('stockRequests', r.id||r._fbid); }catch(e){} }
+      for(const c of dailyClosings){ try{ await window.fbDelete('dailyClosings', c.id||c._fbid); }catch(e){} }
+      for(const s of creditSales){   try{ await window.fbDelete('creditSales',   s.id||s._fbid); }catch(e){} }
+      for(const s of recentSales){   try{ await window.fbDelete('sales',         s.id||s._fbid); }catch(e){} }
+    }
+    setStockRequests([]);
+    setDailyClosings([]);
+    setCreditSales([]);
+    setRecentSales([]);
+    // clear mock/local sales
+    if(window.AppData){ window.AppData.recentSales=[]; window.AppData.voidHistory=[]; window.AppData.staffSales=(window.AppData.staffSales||[]).map(s=>({...s,revenue:0,sales:0})); }
   };
 
   const addStockRequest = async r => {
@@ -1796,6 +2023,11 @@ const App=()=>{
   const addCreditSale = async sale => {
     if(window.DB){ await window.fbAdd('creditSales', sale); }
     else { setCreditSales(p=>[sale,...p]); }
+  };
+
+  const addSale = async sale => {
+    if(window.DB){ await window.fbAdd('sales', sale); }
+    else { setRecentSales(p=>[sale,...p]); }
   };
 
   const receivePayment = async (id, note) => {
@@ -1832,17 +2064,17 @@ const App=()=>{
 
   // ── Screen map ─────────────────────────────────────────────────────────────
   const screenMap={
-    dashboard:    <window.Dashboard user={user}/>,
+    dashboard:    <Dashboard user={user} products={products} customers={customers} recentSales={recentSales}/>,
     inventory:    <Inventory user={user} products={products} onUpdateProducts={updateProducts}/>,
     pos:          <POSScreen user={user} customers={customers} onAddCustomer={addCustomer}
                     employees={employees} receiptSettings={receiptSettings}
                     onOpenReceiptSettings={()=>setShowReceiptSettings(true)}
-                    onCreditSale={addCreditSale} products={products}/>,
-    reports:      <Reports/>,
+                    onCreditSale={addCreditSale} onSale={addSale} products={products}/>,
+    reports:      <Reports recentSales={recentSales} products={products} customers={customers}/>,
     customers:    <Customers user={user} customers={customers} onAddCustomer={addCustomer}/>,
-    employees:    <Employees employees={employees} onUpdate={updateEmployees} user={user} customers={customers}/>,
+    employees:    <Employees employees={employees} onUpdate={updateEmployees} onDelete={deleteEmployee} user={user} customers={customers}/>,
     oversight:    <AdminOversight employees={employees}/>,
-    settings:     <SettingsScreen receiptSettings={receiptSettings} onSave={saveReceiptSettings}/>,
+    settings:     <SettingsScreen receiptSettings={receiptSettings} onSave={saveReceiptSettings} allData={{employees,customers,products,stockRequests,dailyClosings,creditSales}} onReset={resetData}/>,
     stockrequest: <StockRequestScreen user={user} products={products}
                     stockRequests={stockRequests} onSubmit={addStockRequest}/>,
     dailyclose:   <DailyCloseScreen user={user} dailyClosings={dailyClosings} onSubmit={addDailyClosing}/>,
@@ -1861,11 +2093,11 @@ const App=()=>{
   return (
     <>
       {!user
-        ? <window.LoginScreen onLogin={u=>{setUser(u);setScreen('dashboard');}}/>
-        : <window.AppLayout user={user} screen={screen} onNavigate={setScreen}
+        ? <LoginScreen onLogin={u=>{setUser(u);setScreen('dashboard');}} />
+        : <AppLayout user={user} screen={screen} onNavigate={setScreen}
             onLogout={handleLogout} badges={badges}>
             {screenMap[screen]}
-          </window.AppLayout>
+          </AppLayout>
       }
       <ReceiptSettingsModal open={showReceiptSettings} onClose={()=>setShowReceiptSettings(false)}
         settings={receiptSettings} onSave={saveReceiptSettings}/>

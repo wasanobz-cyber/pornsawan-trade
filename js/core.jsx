@@ -94,16 +94,23 @@ const Modal = ({ open, onClose, title, children, width = 520 }) => {
 // ─── Login Screen ────────────────────────────────────────────────────────────
 
 const LoginScreen = ({ onLogin }) => {
-  // Firebase mode: email + password  |  Demo mode: username + password
+  // Supabase mode: email + password  |  Demo mode: username + password
   const isFirebase = !window.FIREBASE_DEMO_MODE;
 
+  const [mode,     setMode]     = useState('login'); // 'login' | 'register'
   const [email,    setEmail]    = useState('');
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
+  const [confirm,  setConfirm]  = useState('');
+  const [regName,  setRegName]  = useState('');
+  const [regPhone, setRegPhone] = useState('');
+  const [regDone,  setRegDone]  = useState(false);
   const [error,    setError]    = useState('');
   const [loading,  setLoading]  = useState(false);
   const [companyLogo, setCompanyLogo] = useState(()=>localStorage.getItem('ptCompanyLogo')||'');
   const logoRef = React.useRef(null);
+
+  const reset = m => { setMode(m); setError(''); setPassword(''); setConfirm(''); setRegDone(false); };
 
   const handleLogoUpload = e => {
     const file = e.target.files[0]; if(!file) return;
@@ -112,7 +119,7 @@ const LoginScreen = ({ onLogin }) => {
     reader.readAsDataURL(file);
   };
 
-  // ── Firebase login ──────────────────────────────────────────────
+  // ── Supabase login ──────────────────────────────────────────────
   const doFirebaseLogin = async () => {
     if (!email.trim() || !password) return;
     setLoading(true); setError('');
@@ -128,6 +135,40 @@ const LoginScreen = ({ onLogin }) => {
         ? 'อีเมลหรือรหัสผ่านไม่ถูกต้อง'
         : e.code === 'auth/too-many-requests'
         ? 'ล็อกอินผิดหลายครั้ง — รอสักครู่แล้วลองใหม่'
+        : (e.message || 'เกิดข้อผิดพลาด');
+      setError(msg);
+    } finally { setLoading(false); }
+  };
+
+  // ── Supabase register ───────────────────────────────────────────
+  const doRegister = async () => {
+    if (!regName.trim())        { setError('กรุณากรอกชื่อ-นามสกุล'); return; }
+    if (!email.trim())          { setError('กรุณากรอกอีเมล'); return; }
+    if (password.length < 6)    { setError('รหัสผ่านต้องมีอย่างน้อย 6 ตัวอักษร'); return; }
+    if (password !== confirm)   { setError('รหัสผ่านไม่ตรงกัน'); return; }
+    if (!window.SB)             { setError('ยังไม่ได้ตั้งค่า Supabase'); return; }
+    setLoading(true); setError('');
+    try {
+      const aRes = await window.SB.auth.signUp({ email: email.trim(), password });
+      if (aRes.error) throw new Error(aRes.error.message);
+      const uid = aRes.data?.user?.id;
+      if (uid) {
+        await window.SB.from('users').insert({
+          id:            uid,
+          name:          regName.trim(),
+          email:         email.trim(),
+          phone:         regPhone.trim(),
+          role:          'employee',
+          status:        'active',
+          prompt_pay_id: regPhone.trim(),
+          staff_id:      Date.now(),
+          join_date:     new Date().toLocaleDateString('th-TH', {year:'numeric',month:'short',day:'numeric'}),
+        });
+      }
+      setRegDone(true);
+    } catch(e) {
+      const msg = e.message?.includes('already registered') || e.message?.includes('already been registered')
+        ? 'อีเมลนี้มีบัญชีแล้ว — ลองเข้าสู่ระบบแทน'
         : (e.message || 'เกิดข้อผิดพลาด');
       setError(msg);
     } finally { setLoading(false); }
@@ -149,7 +190,7 @@ const LoginScreen = ({ onLogin }) => {
   const quickLogin = u => { setUsername(u); setPassword('1234'); doDemoLogin(u, '1234'); };
 
   const handleSubmit = () => isFirebase ? doFirebaseLogin() : doDemoLogin(username, password);
-  const handleKey    = e => e.key === 'Enter' && handleSubmit();
+  const handleKey    = e => e.key === 'Enter' && (mode==='register' ? doRegister() : handleSubmit());
 
   return (
     <div style={{ minHeight:'100vh', background:'linear-gradient(145deg,#0F172A 0%,#1E1B4B 50%,#312E81 100%)', display:'flex', alignItems:'center', justifyContent:'center', padding:'20px' }}>
@@ -183,68 +224,109 @@ const LoginScreen = ({ onLogin }) => {
 
         {/* Card */}
         <div style={{ background:'rgba(255,255,255,0.97)', borderRadius:'22px', padding:'36px', boxShadow:'0 24px 64px rgba(0,0,0,0.4)' }}>
-          <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:'20px' }}>
-            <div>
-              <h2 style={{ fontSize:'20px', fontWeight:700, marginBottom:'4px' }}>เข้าสู่ระบบ</h2>
-              <p style={{ fontSize:'13px', color:'var(--text-muted)' }}>Sign in to your account</p>
-            </div>
-            {isFirebase
-              ? <span style={{fontSize:'11px',fontWeight:700,background:'#D1FAE5',color:'#065F46',padding:'4px 10px',borderRadius:'20px'}}>🔥 Firebase</span>
-              : <span style={{fontSize:'11px',fontWeight:700,background:'#FEF3C7',color:'#92400E',padding:'4px 10px',borderRadius:'20px'}}>🟡 Demo</span>
-            }
-          </div>
 
-          <div style={{ display:'flex', flexDirection:'column', gap:'16px' }}>
-            {isFirebase
-              ? <AppInput label="อีเมล (Email)" type="email" value={email}
-                  onChange={e => { setEmail(e.target.value); setError(''); }}
-                  placeholder="your@email.com" />
-              : <AppInput label="ชื่อผู้ใช้ (Username)" value={username}
-                  onChange={e => { setUsername(e.target.value); setError(''); }} placeholder="admin หรือ employee" />
-            }
-            <AppInput label="รหัสผ่าน (Password)" type="password" value={password}
-              onChange={e => { setPassword(e.target.value); setError(''); }}
-              onKeyDown={handleKey}
-              placeholder="••••••••" />
-
-            {error && (
-              <div style={{ display:'flex', alignItems:'center', gap:'8px', background:'#FEF2F2', border:'1px solid #FECACA', padding:'10px 14px', borderRadius:'10px' }}>
-                <IcoAlert /><p style={{ color:'#DC2626', fontSize:'13px' }}>{error}</p>
-              </div>
-            )}
-
-            <button onClick={handleSubmit} disabled={loading}
-              style={{ width:'100%', padding:'14px', background: loading ? '#A5B4FC' : 'linear-gradient(135deg,#4F46E5,#7C3AED)', color:'#fff', border:'none', borderRadius:'12px', fontSize:'15px', fontWeight:700, cursor: loading ? 'not-allowed' : 'pointer', fontFamily:'inherit', letterSpacing:'0.3px', boxShadow: loading ? 'none' : '0 4px 16px rgba(79,70,229,0.4)' }}>
-              {loading ? '⏳ กำลังเข้าสู่ระบบ...' : 'เข้าสู่ระบบ →'}
-            </button>
-          </div>
-
-          {/* Demo quick-login (only in demo mode) */}
-          {!isFirebase && (
-            <div style={{ marginTop:'24px', padding:'16px', background:'#F8FAFC', borderRadius:'12px', border:'1px solid #E2E8F0' }}>
-              <p style={{ fontSize:'11px', fontWeight:700, color:'#94A3B8', letterSpacing:'0.08em', textTransform:'uppercase', marginBottom:'10px' }}>ทดลองใช้งาน (Demo)</p>
-              <div style={{ display:'flex', gap:'8px' }}>
-                <button onClick={() => quickLogin('admin')}
-                  style={{ flex:1, padding:'10px', background:'#EEF2FF', color:'#4F46E5', border:'1.5px solid #C7D2FE', borderRadius:'10px', fontSize:'13px', fontWeight:600, cursor:'pointer', fontFamily:'inherit' }}>
-                  👑 Admin
+          {/* ── Tab switcher (Supabase mode only) ── */}
+          {isFirebase && (
+            <div style={{display:'flex',background:'#F1F5F9',borderRadius:'12px',padding:'4px',marginBottom:'24px',gap:'4px'}}>
+              {[['login','🔑 เข้าสู่ระบบ'],['register','✏️ สมัครสมาชิก']].map(([m,label])=>(
+                <button key={m} onClick={()=>reset(m)}
+                  style={{flex:1,padding:'10px',borderRadius:'9px',border:'none',cursor:'pointer',fontFamily:'inherit',fontWeight:600,fontSize:'13px',transition:'all 0.15s',
+                    background:mode===m?'#fff':'transparent',
+                    color:mode===m?'var(--primary)':'var(--text-muted)',
+                    boxShadow:mode===m?'0 1px 4px rgba(0,0,0,0.1)':'none'}}>
+                  {label}
                 </button>
-                <button onClick={() => quickLogin('employee')}
-                  style={{ flex:1, padding:'10px', background:'#F0FDF4', color:'#16A34A', border:'1.5px solid #BBF7D0', borderRadius:'10px', fontSize:'13px', fontWeight:600, cursor:'pointer', fontFamily:'inherit' }}>
-                  👤 พนักงาน
-                </button>
-              </div>
-              <p style={{ fontSize:'11px', color:'#CBD5E1', marginTop:'8px', textAlign:'center' }}>รหัสผ่าน: 1234 ทั้งสองบัญชี</p>
+              ))}
             </div>
           )}
 
-          {/* Setup link (Firebase mode — ถ้ายังไม่มี Admin) */}
-          {isFirebase && (
-            <p style={{ marginTop:'20px', textAlign:'center', fontSize:'12px', color:'#94A3B8' }}>
-              ยังไม่มีบัญชี?{' '}
-              <a href="Firebase Setup.html" style={{ color:'var(--primary)', fontWeight:600, textDecoration:'none' }}>
-                ตั้งค่า Firebase →
-              </a>
-            </p>
+          {/* ── Login mode ── */}
+          {mode==='login' && (
+            <>
+              <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:'20px' }}>
+                <div>
+                  <h2 style={{ fontSize:'20px', fontWeight:700, marginBottom:'4px' }}>เข้าสู่ระบบ</h2>
+                  <p style={{ fontSize:'13px', color:'var(--text-muted)' }}>Sign in to your account</p>
+                </div>
+                {isFirebase
+                  ? <span style={{fontSize:'11px',fontWeight:700,background:'#D1FAE5',color:'#065F46',padding:'4px 10px',borderRadius:'20px'}}>🟢 Supabase</span>
+                  : <span style={{fontSize:'11px',fontWeight:700,background:'#FEF3C7',color:'#92400E',padding:'4px 10px',borderRadius:'20px'}}>🟡 Demo</span>
+                }
+              </div>
+              <div style={{ display:'flex', flexDirection:'column', gap:'16px' }}>
+                {isFirebase
+                  ? <AppInput label="อีเมล (Email)" type="email" value={email}
+                      onChange={e => { setEmail(e.target.value); setError(''); }}
+                      placeholder="your@email.com" />
+                  : <AppInput label="ชื่อผู้ใช้ (Username)" value={username}
+                      onChange={e => { setUsername(e.target.value); setError(''); }} placeholder="admin หรือ employee" />
+                }
+                <AppInput label="รหัสผ่าน (Password)" type="password" value={password}
+                  onChange={e => { setPassword(e.target.value); setError(''); }}
+                  onKeyDown={handleKey} placeholder="••••••••" />
+                {error && (
+                  <div style={{ display:'flex', alignItems:'center', gap:'8px', background:'#FEF2F2', border:'1px solid #FECACA', padding:'10px 14px', borderRadius:'10px' }}>
+                    <IcoAlert /><p style={{ color:'#DC2626', fontSize:'13px' }}>{error}</p>
+                  </div>
+                )}
+                <button onClick={handleSubmit} disabled={loading}
+                  style={{ width:'100%', padding:'14px', background: loading ? '#A5B4FC' : 'linear-gradient(135deg,#4F46E5,#7C3AED)', color:'#fff', border:'none', borderRadius:'12px', fontSize:'15px', fontWeight:700, cursor: loading ? 'not-allowed' : 'pointer', fontFamily:'inherit', letterSpacing:'0.3px', boxShadow: loading ? 'none' : '0 4px 16px rgba(79,70,229,0.4)' }}>
+                  {loading ? '⏳ กำลังเข้าสู่ระบบ...' : 'เข้าสู่ระบบ →'}
+                </button>
+              </div>
+              {!isFirebase && (
+                <div style={{ marginTop:'24px', padding:'16px', background:'#F8FAFC', borderRadius:'12px', border:'1px solid #E2E8F0' }}>
+                  <p style={{ fontSize:'11px', fontWeight:700, color:'#94A3B8', letterSpacing:'0.08em', textTransform:'uppercase', marginBottom:'10px' }}>ทดลองใช้งาน (Demo)</p>
+                  <div style={{ display:'flex', gap:'8px' }}>
+                    <button onClick={() => quickLogin('admin')} style={{ flex:1, padding:'10px', background:'#EEF2FF', color:'#4F46E5', border:'1.5px solid #C7D2FE', borderRadius:'10px', fontSize:'13px', fontWeight:600, cursor:'pointer', fontFamily:'inherit' }}>👑 Admin</button>
+                    <button onClick={() => quickLogin('employee')} style={{ flex:1, padding:'10px', background:'#F0FDF4', color:'#16A34A', border:'1.5px solid #BBF7D0', borderRadius:'10px', fontSize:'13px', fontWeight:600, cursor:'pointer', fontFamily:'inherit' }}>👤 พนักงาน</button>
+                  </div>
+                  <p style={{ fontSize:'11px', color:'#CBD5E1', marginTop:'8px', textAlign:'center' }}>รหัสผ่าน: 1234 ทั้งสองบัญชี</p>
+                </div>
+              )}
+            </>
+          )}
+
+          {/* ── Register mode ── */}
+          {mode==='register' && (
+            <>
+              <div style={{marginBottom:'20px'}}>
+                <h2 style={{ fontSize:'20px', fontWeight:700, marginBottom:'4px' }}>สมัครสมาชิก</h2>
+                <p style={{ fontSize:'13px', color:'var(--text-muted)' }}>สร้างบัญชีพนักงานใหม่</p>
+              </div>
+
+              {regDone ? (
+                <div style={{display:'flex',flexDirection:'column',gap:'16px',alignItems:'center',textAlign:'center',padding:'20px 0'}}>
+                  <div style={{width:'64px',height:'64px',background:'#D1FAE5',borderRadius:'50%',display:'flex',alignItems:'center',justifyContent:'center',fontSize:'32px'}}>✅</div>
+                  <div>
+                    <p style={{fontWeight:700,fontSize:'16px',color:'#065F46',marginBottom:'6px'}}>สมัครสมาชิกสำเร็จ!</p>
+                    <p style={{fontSize:'13px',color:'var(--text-muted)',lineHeight:1.6}}>ระบบส่งอีเมลยืนยันไปที่<br/><strong>{email}</strong><br/>กรุณาตรวจสอบอีเมลก่อน Login</p>
+                  </div>
+                  <button onClick={()=>reset('login')}
+                    style={{padding:'12px 28px',background:'linear-gradient(135deg,#4F46E5,#7C3AED)',color:'#fff',border:'none',borderRadius:'10px',fontSize:'14px',fontWeight:700,cursor:'pointer',fontFamily:'inherit'}}>
+                    ไปหน้า Login →
+                  </button>
+                </div>
+              ) : (
+                <div style={{display:'flex',flexDirection:'column',gap:'14px'}}>
+                  <AppInput label="ชื่อ-นามสกุล *" value={regName} onChange={e=>{setRegName(e.target.value);setError('');}} placeholder="สมหมาย รักงาน"/>
+                  <AppInput label="อีเมล *" type="email" value={email} onChange={e=>{setEmail(e.target.value);setError('');}} placeholder="your@email.com"/>
+                  <AppInput label="เบอร์โทรศัพท์" value={regPhone} onChange={e=>setRegPhone(e.target.value)} placeholder="08x-xxx-xxxx"/>
+                  <AppInput label="รหัสผ่าน * (อย่างน้อย 6 ตัว)" type="password" value={password} onChange={e=>{setPassword(e.target.value);setError('');}} placeholder="••••••••"/>
+                  <AppInput label="ยืนยันรหัสผ่าน *" type="password" value={confirm} onChange={e=>{setConfirm(e.target.value);setError('');}} onKeyDown={handleKey} placeholder="••••••••"/>
+                  {error && (
+                    <div style={{display:'flex',alignItems:'center',gap:'8px',background:'#FEF2F2',border:'1px solid #FECACA',padding:'10px 14px',borderRadius:'10px'}}>
+                      <IcoAlert/><p style={{color:'#DC2626',fontSize:'13px'}}>{error}</p>
+                    </div>
+                  )}
+                  <button onClick={doRegister} disabled={loading}
+                    style={{width:'100%',padding:'14px',background:loading?'#A5B4FC':'linear-gradient(135deg,#4F46E5,#7C3AED)',color:'#fff',border:'none',borderRadius:'12px',fontSize:'15px',fontWeight:700,cursor:loading?'not-allowed':'pointer',fontFamily:'inherit',boxShadow:loading?'none':'0 4px 16px rgba(79,70,229,0.4)'}}>
+                    {loading ? '⏳ กำลังสมัคร...' : 'สมัครสมาชิก →'}
+                  </button>
+                  <p style={{fontSize:'12px',color:'#94A3B8',textAlign:'center'}}>บัญชีใหม่จะมีสิทธิ์ระดับพนักงาน<br/>Admin สามารถเปลี่ยนสิทธิ์ได้ภายหลัง</p>
+                </div>
+              )}
+            </>
           )}
         </div>
       </div>
@@ -387,19 +469,37 @@ const AppLayout = ({ user, screen, onNavigate, onLogout, children, badges={} }) 
 
 // ─── Dashboard ───────────────────────────────────────────────────────────────
 
-const Dashboard = ({ user }) => {
-  const { recentSales, dailySales, products, customers } = window.AppData;
+const Dashboard = ({ user, products=[], customers=[], recentSales=[] }) => {
+  const dayKey = ts => { const d = new Date(ts); return `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`; };
+  const tsOf   = s => s.ts || Date.now();
   const lowStock   = products.filter(p => p.stockBase <= p.minStockBase);
-  const todaySales = recentSales.filter(s => s.date === '2 มิ.ย. 2569');
-  const todayRev   = todaySales.reduce((s, x) => s + x.total, 0);
-  const maxAmt     = Math.max(...dailySales.map(d => d.amount));
+  const todayKey   = dayKey(Date.now());
+  const todaySales = recentSales.filter(s => dayKey(tsOf(s)) === todayKey);
+  const todayRev   = todaySales.reduce((s, x) => s + (x.total||0), 0);
+
+  // รายได้เดือนนี้ (เดือนปัจจุบัน)
+  const now = new Date();
+  const monthRev = recentSales
+    .filter(s => { const d = new Date(tsOf(s)); return d.getMonth()===now.getMonth() && d.getFullYear()===now.getFullYear(); })
+    .reduce((s, x) => s + (x.total||0), 0);
+
+  // คำนวณ 7 วันล่าสุด
+  const last7Days = [];
+  for(let i=6; i>=0; i--){
+    const d = new Date();
+    d.setDate(d.getDate()-i);
+    const key = dayKey(d.getTime());
+    const daysSales = recentSales.filter(s => dayKey(tsOf(s)) === key).reduce((s,x) => s + (x.total||0), 0);
+    last7Days.push({ day: d.toLocaleDateString('th-TH', {month:'short',day:'numeric'}), amount: daysSales });
+  }
+  const maxAmt = Math.max(...last7Days.map(d => d.amount), 1);
 
   const payLabel = { cash:'เงินสด', transfer:'โอนเงิน', promptpay:'PromptPay' };
   const payColor = { cash:'green', transfer:'blue', promptpay:'purple' };
 
   const kpis = [
     { label:'ยอดขายวันนี้', en:"Today's Sales", value:`฿${todayRev.toLocaleString()}`, sub:`${todaySales.length} รายการ`, clr:'#4F46E5', bg:'#EEF2FF', Icon:IcoCart },
-    { label:'ยอดขายเดือนนี้', en:'Monthly Revenue', value:'฿180,890', sub:'+12.5% จากเดือนที่แล้ว', clr:'#10B981', bg:'#D1FAE5', Icon:IcoTrend },
+    { label:'ยอดขายเดือนนี้', en:'Monthly Revenue', value:`฿${monthRev.toLocaleString()}`, sub:`${recentSales.length} บิลทั้งหมด`, clr:'#10B981', bg:'#D1FAE5', Icon:IcoTrend },
     { label:'สินค้าใกล้หมด', en:'Low Stock Items', value:lowStock.length, sub:'รายการที่ต้องสั่งซื้อ', clr:'#EF4444', bg:'#FEE2E2', Icon:IcoAlert },
     { label:'ลูกค้าทั้งหมด', en:'Registered Customers', value:customers.length, sub:'บัญชีลูกค้า', clr:'#F59E0B', bg:'#FEF3C7', Icon:IcoUsers },
   ];
@@ -431,15 +531,12 @@ const Dashboard = ({ user }) => {
           <p style={{ fontSize:'15px', fontWeight:700, marginBottom:'2px' }}>ยอดขาย 7 วันล่าสุด</p>
           <p style={{ fontSize:'12px', color:'var(--text-muted)', marginBottom:'22px' }}>Sales Last 7 Days</p>
           <div style={{ display:'flex', alignItems:'flex-end', gap:'10px', height:'160px' }}>
-            {dailySales.map((d,i) => {
+            {last7Days.map((d,i) => {
               const h = (d.amount / maxAmt) * 130;
-              const isToday = i === dailySales.length - 1;
               return (
                 <div key={i} style={{ flex:1, display:'flex', flexDirection:'column', alignItems:'center', gap:'6px' }}>
                   <span style={{ fontSize:'10px', color:'var(--text-muted)', fontWeight:500 }}>฿{(d.amount/1000).toFixed(0)}k</span>
-                  <div style={{ width:'100%', height:`${h}px`, background: isToday ? '#C7D2FE' : 'var(--primary)', borderRadius:'6px 6px 0 0', opacity: isToday ? 0.7 : 1, position:'relative' }}>
-                    {isToday && <div style={{ position:'absolute', top:'-5px', left:'50%', transform:'translateX(-50%)', background:'var(--primary)', color:'#fff', fontSize:'9px', fontWeight:700, padding:'1px 4px', borderRadius:'4px', whiteSpace:'nowrap' }}>วันนี้</div>}
-                  </div>
+                  <div style={{ width:'100%', height:`${h}px`, background: 'var(--primary)', borderRadius:'6px 6px 0 0', position:'relative' }}/>
                   <span style={{ fontSize:'10px', color:'var(--text-muted)', whiteSpace:'nowrap', textAlign:'center' }}>{d.day}</span>
                 </div>
               );
@@ -490,16 +587,24 @@ const Dashboard = ({ user }) => {
               </tr>
             </thead>
             <tbody>
-              {recentSales.map((s,i) => (
-                <tr key={i} style={{ borderTop:'1px solid var(--border)' }}>
+              {recentSales.length===0 && (
+                <tr><td colSpan={6} style={{ padding:'32px', textAlign:'center', color:'var(--text-muted)', fontSize:'14px' }}>ยังไม่มีรายการขาย</td></tr>
+              )}
+              {[...recentSales].sort((a,b)=>(b.ts||0)-(a.ts||0)).slice(0,8).map((s,i) => {
+                const cust  = s.customerName || (typeof s.customer==='string' ? s.customer : s.customer?.name) || 'ลูกค้าทั่วไป';
+                const items = s.itemCount ?? (Array.isArray(s.items) ? s.items.length : s.items) ?? 0;
+                const pay   = s.payment || s.payMethod || 'cash';
+                return (
+                <tr key={s.id||i} style={{ borderTop:'1px solid var(--border)' }}>
                   <td style={{ padding:'13px 18px', fontSize:'13px', color:'var(--primary)', fontWeight:600 }}>{s.id}</td>
                   <td style={{ padding:'13px 18px', fontSize:'13px', color:'var(--text-muted)' }}>{s.date}</td>
-                  <td style={{ padding:'13px 18px', fontSize:'14px', fontWeight:500 }}>{s.customer}</td>
-                  <td style={{ padding:'13px 18px', fontSize:'13px', color:'var(--text-muted)' }}>{s.items} รายการ</td>
-                  <td style={{ padding:'13px 18px', fontSize:'15px', fontWeight:700 }}>฿{s.total.toLocaleString()}</td>
-                  <td style={{ padding:'13px 18px' }}><Badge color={payColor[s.payment]}>{payLabel[s.payment]}</Badge></td>
+                  <td style={{ padding:'13px 18px', fontSize:'14px', fontWeight:500 }}>{cust}</td>
+                  <td style={{ padding:'13px 18px', fontSize:'13px', color:'var(--text-muted)' }}>{items} รายการ</td>
+                  <td style={{ padding:'13px 18px', fontSize:'15px', fontWeight:700 }}>฿{(s.total||0).toLocaleString()}</td>
+                  <td style={{ padding:'13px 18px' }}><Badge color={payColor[pay]}>{payLabel[pay]||pay}</Badge></td>
                 </tr>
-              ))}
+                );
+              })}
             </tbody>
           </table>
         </div>
@@ -507,6 +612,12 @@ const Dashboard = ({ user }) => {
     </div>
   );
 };
+
+
+
+
+
+
 
 // ─── Exports ─────────────────────────────────────────────────────────────────
 Object.assign(window, {
